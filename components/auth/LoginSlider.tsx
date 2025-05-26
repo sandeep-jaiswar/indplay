@@ -1,13 +1,18 @@
 "use client"
 
 import { zodResolver } from "@hookform/resolvers/zod"
-import { ConfirmationResult, RecaptchaVerifier, signInWithPhoneNumber } from "firebase/auth"
-import { useRouter } from "next/navigation" // Import useRouter
-import React, { useEffect, useState } from "react"
+import { ConfirmationResult, RecaptchaVerifier, signInWithPhoneNumber, AuthError } from "firebase/auth"
+import { useRouter } from "next/navigation"
+import React, { useEffect, useState, useCallback } from "react"
 import { SubmitHandler, useForm } from "react-hook-form"
 import { z } from "zod"
-import { otpSchema, phoneSchema } from "../../lib/schemas" // Adjust path as needed
+import { otpSchema, phoneSchema } from "../../lib/schemas"
 import { auth } from "../../utils/firebase"
+
+// Define a more specific type for Firebase errors if possible, or use AuthError
+interface FirebaseError extends Error {
+  code?: string
+}
 
 type PhoneFormValues = z.infer<typeof phoneSchema>
 type OtpFormValues = z.infer<typeof otpSchema>
@@ -17,32 +22,55 @@ interface LoginSliderProps {
   onClose: () => void
 }
 
+const RECAPTCHA_CONTAINER_ID = "recaptcha-container"
+
 const LoginSlider: React.FC<LoginSliderProps> = ({ isOpen, onClose }) => {
-  const router = useRouter() // Initialize useRouter
+  const router = useRouter()
   const [step, setStep] = useState<"phone" | "otp">("phone")
   const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
 
-  useEffect(() => {
-    if (isOpen && !window.recaptchaVerifier) {
-      window.recaptchaVerifier = new RecaptchaVerifier(auth, "recaptcha-container", {
-        size: "invisible",
-        callback: (response: unknown) => {
-          // reCAPTCHA solved
-          console.log("reCAPTCHA solved successfully:", response)
-        },
-        "expired-callback": () => {
-          setError("reCAPTCHA challenge expired. Please try sending OTP again.")
-        },
-      })
-      // It might be necessary to explicitly render if challenges arise often
-      // window.recaptchaVerifier.render().catch(err => console.error("Recaptcha render error:", err));
-    } else if (!isOpen && window.recaptchaVerifier) {
+  const initializeRecaptcha = useCallback(() => {
+    if (window.recaptchaVerifier) {
       window.recaptchaVerifier.clear()
-      window.recaptchaVerifier = undefined
     }
-  }, [isOpen, auth]) // Added auth to dependency array
+    window.recaptchaVerifier = new RecaptchaVerifier(auth, RECAPTCHA_CONTAINER_ID, {
+      size: "invisible",
+      callback: (response: unknown) => {
+        console.log("reCAPTCHA solved successfully:", response)
+      },
+      "expired-callback": () => {
+        setError("reCAPTCHA challenge expired. Please try sending OTP again.")
+      },
+    })
+    return window.recaptchaVerifier
+  }, [auth]) // auth is a stable dependency from firebase setup
+
+  useEffect(() => {
+    if (isOpen) {
+      if (!document.getElementById(RECAPTCHA_CONTAINER_ID)) {
+        console.error("reCAPTCHA container not found in the DOM.")
+        setError("Login UI is not set up correctly. Please contact support.")
+        return
+      }
+      if (!window.recaptchaVerifier) {
+        initializeRecaptcha()
+      }
+    } else {
+      if (window.recaptchaVerifier) {
+        window.recaptchaVerifier.clear()
+        window.recaptchaVerifier = undefined
+      }
+    }
+    // Cleanup on component unmount
+    return () => {
+      if (window.recaptchaVerifier) {
+        window.recaptchaVerifier.clear()
+        window.recaptchaVerifier = undefined
+      }
+    }
+  }, [isOpen, initializeRecaptcha])
 
   const {
     register: registerPhone,
@@ -64,35 +92,31 @@ const LoginSlider: React.FC<LoginSliderProps> = ({ isOpen, onClose }) => {
     setError(null)
     setIsLoading(true)
     try {
-      if (!window.recaptchaVerifier) {
-        // Attempt to re-initialize or render if it's missing and slider is open
-        if (isOpen && document.getElementById("recaptcha-container")) {
-          window.recaptchaVerifier = new RecaptchaVerifier(auth, "recaptcha-container", {
-            size: "invisible",
-            callback: (response: unknown) => {
-              console.log("reCAPTCHA solved successfully:", response)
-            },
-            "expired-callback": () => {
-              setError("reCAPTCHA challenge expired. Please try sending OTP again.")
-            },
-          })
-          await window.recaptchaVerifier.render() // Ensure it renders before use
+      let verifier = window.recaptchaVerifier
+      if (!verifier) {
+        if (isOpen && document.getElementById(RECAPTCHA_CONTAINER_ID)) {
+          verifier = initializeRecaptcha()
+          await verifier.render() // Ensure it renders before use
         } else {
-          throw new Error("reCAPTCHA verifier not initialized and cannot be setup now.")
+          throw new Error("reCAPTCHA verifier not available.")
         }
       }
-      const verifier = window.recaptchaVerifier
+
       const result = await signInWithPhoneNumber(auth, data.phone, verifier)
       setConfirmationResult(result)
       setStep("otp")
-    } catch (err: any) {
+    } catch (err) {
       console.error("Error sending OTP:", err)
       let message = "Failed to send OTP. Ensure your phone number is correct and reCAPTCHA is verified."
-      if (err.message) {
-        message = err.message
-      }
-      if (err.code === "auth/invalid-phone-number") {
-        message = "The phone number is not valid. Please include the country code (e.g., +1)."
+      if (err instanceof Error) {
+        const firebaseError = err as FirebaseError // Or AuthError from firebase/auth
+        message = firebaseError.message
+        if (firebaseError.code === "auth/invalid-phone-number") {
+          message = "The phone number is not valid. Please include the country code (e.g., +1)."
+        } else if (firebaseError.code === "auth/too-many-requests") {
+          message = "Too many requests. Please try again later."
+        }
+        // Add more specific Firebase error codes if needed
       }
       setError(message)
     }
@@ -111,18 +135,23 @@ const LoginSlider: React.FC<LoginSliderProps> = ({ isOpen, onClose }) => {
       await confirmationResult.confirm(data.otp)
       console.log("User signed in successfully!")
       onClose()
-      router.push("/home") // Redirect to /home
-    } catch (err: any) {
+      router.push("/home")
+    } catch (err) {
       console.error("Error verifying OTP:", err)
       let message = "Invalid OTP. Please try again."
-      if (err.message) {
-        message = err.message
-      }
-      if (err.code === "auth/invalid-verification-code") {
-        message = "The OTP entered is incorrect. Please check and try again."
-      }
-      if (err.code === "auth/code-expired") {
-        message = "The OTP has expired. Please request a new one."
+      if (err instanceof Error) {
+        const firebaseError = err as AuthError // Using imported AuthError
+        message = firebaseError.message
+        if (
+          firebaseError.code === "auth/invalid-verification-code" ||
+          firebaseError.code === "auth/missing-verification-code"
+        ) {
+          message = "The OTP entered is incorrect. Please check and try again."
+        } else if (firebaseError.code === "auth/code-expired") {
+          message = "The OTP has expired. Please request a new one."
+        } else if (firebaseError.code === "auth/credential-already-in-use") {
+          message = "This phone number is already associated with an existing account."
+        }
       }
       setError(message)
     }
@@ -137,14 +166,14 @@ const LoginSlider: React.FC<LoginSliderProps> = ({ isOpen, onClose }) => {
         className="h-full w-full max-w-md transform bg-white p-6 shadow-xl transition-transform duration-300 ease-in-out"
         style={{ transform: isOpen ? "translateX(0)" : "translateX(100%)" }}
       >
+        {/* This div is essential for Firebase reCAPTCHA to mount. It can be styled to be hidden. */}
+        <div id={RECAPTCHA_CONTAINER_ID} />
         <button onClick={onClose} className="absolute top-4 right-4 text-2xl text-gray-600 hover:text-gray-900">
           &times;
         </button>
         <h2 className="mb-6 text-2xl font-semibold text-gray-800">Login</h2>
 
         {error && <p className="mb-4 rounded-md bg-red-100 p-3 text-sm text-red-600">{error}</p>}
-
-        <div id="recaptcha-container"></div>
 
         {step === "phone" && (
           <form onSubmit={handleSubmitPhone(handleSendOtp)} className="space-y-6">
@@ -180,7 +209,7 @@ const LoginSlider: React.FC<LoginSliderProps> = ({ isOpen, onClose }) => {
               <input
                 id="otp"
                 type="text"
-                inputMode="numeric" // Better for mobile keyboards
+                inputMode="numeric"
                 maxLength={6}
                 {...registerOtp("otp")}
                 className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 focus:outline-none sm:text-sm"
@@ -199,7 +228,10 @@ const LoginSlider: React.FC<LoginSliderProps> = ({ isOpen, onClose }) => {
               type="button"
               onClick={() => {
                 setStep("phone")
-                setError(null) /* Consider re-initializing reCAPTCHA or clearing OTP result */
+                setError(null)
+                // Optionally re-initialize reCAPTCHA here or ensure it's ready for next send
+                // if (window.recaptchaVerifier) window.recaptchaVerifier.clear();
+                // initializeRecaptcha();
               }}
               className="mt-2 w-full text-sm text-indigo-600 hover:text-indigo-500"
             >
@@ -212,10 +244,10 @@ const LoginSlider: React.FC<LoginSliderProps> = ({ isOpen, onClose }) => {
   )
 }
 
-// Global window interface for reCAPTCHA verifier
+// Placed in a global.d.ts or types/firebase.d.ts instead for better project structure
 declare global {
   interface Window {
-    recaptchaVerifier?: RecaptchaVerifier
+    recaptchaVerifier?: RecaptchaVerifier | undefined
   }
 }
 
