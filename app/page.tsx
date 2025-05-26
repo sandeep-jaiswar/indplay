@@ -1,9 +1,9 @@
-"use client";
+"use client"
 
 // import { Metadata } from "next"
 import { useState } from "react"
 import { Button } from "components/Button/Button"
-import LoginSlider from '../components/auth/LoginSlider';
+import LoginSlider from "../components/auth/LoginSlider"
 
 // export const metadata: Metadata = {
 //   title: "Next.js Enterprise Boilerplate",
@@ -12,7 +12,7 @@ import LoginSlider from '../components/auth/LoginSlider';
 //   },
 //   openGraph: {
 //     url: "https://next-enterprise.vercel.app/",
-//     images: [     
+//     images: [
 //       {
 //         width: 1200,
 //         height: 630,
