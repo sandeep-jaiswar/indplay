@@ -1,5 +1,7 @@
-import { Metadata } from "next"
-import { Button } from "components/Button/Button"
+import { Metadata } from "next";
+import { Button } from "components/Button/Button";
+import LoginSlider from "../components/auth/LoginSlider"; // Adjust path as needed
+import { useState } from "react"; // Import useState
 
 export const metadata: Metadata = {
   title: "Next.js Enterprise Boilerplate",
@@ -16,12 +18,27 @@ export const metadata: Metadata = {
       },
     ],
   },
-}
+};
 
 export default function Web() {
+  const [isLoginSliderOpen, setIsLoginSliderOpen] = useState(false);
+
   return (
     <>
-      <Button />
+      {/* Your existing page content */}
+      <div className="p-4">
+        <h1 className="text-xl mb-4">Welcome! Please log in.</h1>
+        <Button onClick={() => setIsLoginSliderOpen(true)}>Login with Phone</Button>
+      </div>
+
+      <LoginSlider 
+        isOpen={isLoginSliderOpen} 
+        onClose={() => setIsLoginSliderOpen(false)} 
+      />
+
+      {/* Make sure you have a div for reCAPTCHA if you haven't placed it elsewhere globally */}
+      {/* It can be hidden if using invisible reCAPTCHA, but must be in the DOM when verifier initializes */}
+      {isLoginSliderOpen && <div id="recaptcha-container" style={{ display: 'none' }}></div>}
     </>
-  )
+  );
 }
