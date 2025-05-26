@@ -1,5 +1,5 @@
 import { initializeApp } from "firebase/app"
-
+import { getAuth } from "firebase/auth"
 import { collection, getFirestore } from "firebase/firestore"
 import { getStorage } from "firebase/storage"
 
@@ -13,6 +13,7 @@ const clientCredentials = {
 }
 
 const app = initializeApp(clientCredentials)
+const auth = getAuth(app)
 
 const db = getFirestore(app)
 const storage = getStorage(app)
@@ -21,4 +22,4 @@ const postsCollection = collection(db, "posts")
 const commentsCollection = collection(db, "comments")
 const usersCollection = collection(db, "users")
 
-export { app, db, storage, postsCollection, commentsCollection, usersCollection }
+export { app, auth, db, storage, postsCollection, commentsCollection, usersCollection }
